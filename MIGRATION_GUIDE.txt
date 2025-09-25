@@ -1,0 +1,180 @@
+# Database Migration Guide for ScreenCast Application
+
+## Prerequisites
+1. Ensure you have Flask-Migrate installed:
+   ```bash
+   pip install Flask-Migrate
+   ```
+
+2. Check your .env file has the correct database configuration:
+   ```
+   DB_TYPE=sqlite        # or mysql, postgresql
+   DB_NAME=event_database.db
+   # For MySQL/PostgreSQL also include:
+   # DB_USER=your_username
+   # DB_PASSWORD=your_password
+   # DB_HOST=localhost
+   # DB_PORT=3306
+   ```
+
+## Migration Steps
+
+1. Initialize migrations (First time only):
+   ```bash
+   cd backend
+   flask db init
+   ```
+   This creates a 'migrations' directory in your project.
+
+2. Create a new migration:
+   ```bash
+   flask db migrate -m "Initial migration"
+   ```
+   This generates a new migration script in migrations/versions/
+
+3. Apply the migration:
+   ```bash
+   flask db upgrade
+   ```
+   This applies all pending migrations to your database.
+
+## Verify Migration
+
+1. Check if tables were created:
+   ```bash
+   # For SQLite
+   sqlite3 instance/event_database.db
+   .tables
+   # You should see: users, devices, videos, schedules
+
+   # For MySQL
+   mysql -u your_username -p
+   USE your_database_name;
+   SHOW TABLES;
+
+   # For PostgreSQL
+   psql -U your_username -d your_database_name
+   \dt
+   ```
+
+2. Check migration history:
+   ```bash
+   flask db history
+   ```
+
+## Common Issues and Solutions
+
+1. "Target database is not up to date":
+   ```bash
+   flask db stamp head
+   flask db upgrade
+   ```
+
+2. "Table already exists":
+   ```bash
+   # Drop all tables and re-run migration
+   flask db downgrade base
+   flask db upgrade
+   ```
+
+3. "Can't locate revision identified by...":
+   ```bash
+   # Reset migration history
+   flask db stamp base
+   flask db migrate -m "Fresh start"
+   flask db upgrade
+   ```
+
+## Models in Your Application
+
+Your application has the following models:
+
+1. User
+   - Primary fields: userId, username, email, password
+   - Relationships: devices, videos
+
+2. Device
+   - Primary fields: device_id, device_code, status
+   - Relationships: owner (User), schedules
+
+3. Video
+   - Primary fields: video_id, title, video_link
+   - Relationships: user (User)
+
+4. Schedule (referenced but not shown in provided code)
+   - Relationships: device (Device)
+
+## Backup Recommendations
+
+1. Before migrating:
+   ```bash
+   # For SQLite
+   cp instance/event_database.db instance/event_database.backup.db
+
+   # For MySQL
+   mysqldump -u your_username -p your_database > backup.sql
+
+   # For PostgreSQL
+   pg_dump -U your_username your_database > backup.sql
+   ```
+
+## Testing the Migration
+
+1. Test the models:
+   ```python
+   from app import create_app
+   from extensions import db
+   from models.models import User, Device, Video
+
+   app = create_app()
+   with app.app_context():
+       # Check if tables exist
+       tables = db.engine.table_names()
+       print("Tables:", tables)
+
+       # Try creating a test user
+       try:
+           test_user = User(
+               username="test",
+               email="test@example.com"
+           )
+           db.session.add(test_user)
+           db.session.commit()
+           print("Test user created successfully")
+       except Exception as e:
+           print("Error:", str(e))
+           db.session.rollback()
+   ```
+
+## Rollback Instructions
+
+If something goes wrong:
+
+1. Revert to previous migration:
+   ```bash
+   flask db downgrade
+   ```
+
+2. Restore backup:
+   ```bash
+   # For SQLite
+   cp instance/event_database.backup.db instance/event_database.db
+
+   # For MySQL
+   mysql -u your_username -p your_database < backup.sql
+
+   # For PostgreSQL
+   psql -U your_username your_database < backup.sql
+   ```
+
+Remember to always backup your database before running migrations in production!
+
+
+
+
+$env:FLASK_APP="manage.py"
+
+flask db migrate -m "Describe your change"
+
+flask db upgrade
+
