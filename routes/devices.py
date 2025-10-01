@@ -18,11 +18,24 @@ devices_bp = Blueprint('devices', __name__)
 def create_device():
     user_id = get_jwt_identity()
     data = request.json or {}
-    name = data.get('name')
-    device_code = name
-    device_token = uuid.uuid4().hex  
+    name = data.get('name', '').strip()
+
+    if not name:
+        return jsonify({"error": "Device name is required"}), 400
+
+    # Check for duplicate device_code
+    if Device.query.filter_by(device_code=name).first():
+        return jsonify({"error": "Device code already exists"}), 400
+
+    # Sanitize device_code for filename safety
+    safe_code = "".join(c for c in name if c.isalnum() or c in ('-', '_'))
+
+    # Generate device token
+    device_token = uuid.uuid4().hex
+
+    # Create device record
     device = Device(
-        device_code=device_code,
+        device_code=safe_code,
         device_token=device_token,
         user_id=user_id,
         status='inactive'
@@ -30,11 +43,11 @@ def create_device():
     db.session.add(device)
     db.session.commit()
 
-    # Generate device configuration
+    # Prepare config
     config = {
-        "backend_url": request.host_url.rstrip('/'),
-        "device_code": device_code,
-        "device_token": device_token,
+        "API_BASE": request.host_url.rstrip('/'),
+        "DEVICE_NAME": safe_code,
+        "DEVICE_TOKEN": device_token,
         "api_version": "1.0"
     }
 
@@ -43,14 +56,51 @@ def create_device():
     json.dump(config, config_file, indent=2)
     config_file.seek(0)
 
-    # Return the configuration file for download
+    # Return JSON with device info + file download
+    response = send_file(
+        io.BytesIO(config_file.getvalue().encode()),
+        mimetype='application/json',
+        as_attachment=True,
+        download_name=f'device_{safe_code}_config.json'
+    )
+
+    # Optional: include device info in headers or JSON body
+    response.headers["X-Device-Id"] = str(device.device_id)
+    response.headers["X-Device-Code"] = safe_code
+
+    return response
+
+#_________________downloading the config file ------------------------------------
+
+
+@devices_bp.route('/<int:device_id>/download-config', methods=['GET'])
+@jwt_required()
+def download_device_config(device_id):
+    # Fetch the device
+    device = Device.query.get(device_id)
+    if not device:
+        return jsonify({"error": "Device not found"}), 404
+
+    # Prepare config
+    config = {
+        "backend_url": request.host_url.rstrip('/'),
+        "device_code": device.device_code,
+        "device_token": device.device_token,
+        "api_version": "1.0"
+    }
+
+    # Create config file in memory
+    config_file = io.StringIO()
+    json.dump(config, config_file, indent=2)
+    config_file.seek(0)
+
+    # Send as downloadable file
     return send_file(
         io.BytesIO(config_file.getvalue().encode()),
         mimetype='application/json',
         as_attachment=True,
-        download_name=f'device_{device_code}_config.json'
+        download_name=f'device_{device.device_code}_config.json'
     )
-
 
 @devices_bp.route('/register', methods=['POST'])
 def register_device():
@@ -146,7 +196,7 @@ def list_devices():
 
 
 
-#------------------------------ API FOR FLASK -----------------------------------------------
+#------------------------------ API FOR PI -----------------------------------------------
 
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
