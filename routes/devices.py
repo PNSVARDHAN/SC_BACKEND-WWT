@@ -196,7 +196,7 @@ def list_devices():
 
 
 
-#------------------------------ API FOR PI -----------------------------------------------
+#------------------------------ API FOR PI -------------------------------------
 
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
@@ -273,8 +273,7 @@ def update_download_status():
     ).first()
 
     if sv:
-        # optional: add a download_status field in ScheduleVideo or Video
-        sv.download_status = True  # if using a dedicated column
+        sv.download_status = True
         db.session.commit()
 
     return jsonify({"message": "Download status updated"})
