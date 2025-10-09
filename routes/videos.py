@@ -18,8 +18,6 @@ ALLOWED_EXT = {'mp4', 'mov', 'mkv', 'avi'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.',1)[1].lower() in ALLOWED_EXT
 
-#----------------------API FOR VIDEO UPLOAD---------------------------------
-
 #_______________ THIS IS USED TO STORE VIDEOS IN CLOUDFARE _______________________________
 
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
@@ -203,11 +201,11 @@ def set_default_video(video_id):
 
 # THIS API IS USED TO STORE THE VIDEOS IN SERVER SIDE 
 
-from werkzeug.utils import secure_filename
+# from werkzeug.utils import secure_filename
 
-# Create uploads folder if it doesn't exist
-UPLOAD_FOLDER = "/tmp/uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# # Create uploads folder if it doesn't exist
+# UPLOAD_FOLDER = "/tmp/uploads"
+# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 # @videos_bp.route("/upload", methods=["POST"])
@@ -393,5 +391,5 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 #     return jsonify({"message": f"{video.title} set as default"})
 
 
-#-----------------------------END FOR STORING VIDEOS IN SERVER ------------------------------------
+# #-------------END FOR STORING VIDEOS IN SERVER -----------------
 

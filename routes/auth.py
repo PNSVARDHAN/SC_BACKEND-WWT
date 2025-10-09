@@ -10,43 +10,9 @@ import random
 from werkzeug.security import generate_password_hash, check_password_hash
 import smtplib
 from email.mime.text import MIMEText
+from datetime import datetime, timedelta
 
 auth_bp = Blueprint("auth", __name__)
-
-otp_storage = {}
-
-
-# ------------------ Signup ------------------
-@auth_bp.route("/signup", methods=["POST", "OPTIONS"])
-def signup():
-    if request.method == "OPTIONS":
-        return '', 204
-
-    data = request.json
-    email = data.get("email")
-    username = data.get("username")
-    password = data.get("password")
-
-    if not email or not username or not password:
-        return jsonify({"error": "All fields required"}), 400
-
-    existing_user = User.query.filter_by(email=email).first()
-    if existing_user:
-        return jsonify({"error": "User already exists"}), 400
-
-    hashed_pw = generate_password_hash(password)
-    new_user = User(username=username, email=email, password=hashed_pw)
-    db.session.add(new_user)
-    db.session.commit()
-
-    token = create_access_token(identity=str(new_user.userId))
-    return jsonify({
-    "message": "Signup successful",
-    "token": token,
-    "user": {
-        "id": new_user.userId,
-    }
-})
 
 # ------------------ Login ------------------
 @auth_bp.route("/login", methods=["POST", "OPTIONS"])
@@ -85,7 +51,6 @@ def login():
         }
     })
 
-
 # ------------------ Google Login ------------------
 @auth_bp.route("/google-login", methods=["POST", "OPTIONS"])
 def google_login():
@@ -117,87 +82,6 @@ def google_login():
     except Exception as e:
         return jsonify({"error": "Invalid Google token", "details": str(e)}), 400
 
-
-# ------------------ Forgot Password ------------------
-@auth_bp.route("/forgot-password", methods=["POST"])
-def forgot_password():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
-
-    email = data.get("email")
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    otp = random.randint(100000, 999999)
-    otp_storage[email] = {"otp": otp, "expires": datetime.utcnow() + timedelta(minutes=5)}
-
-    # --- Send OTP via SMTP ---
-    try:
-        subject = "Password Reset OTP"
-        body = f"Hello {user.username},\n\nYour OTP for password reset is: {otp}\nIt is valid for 5 minutes."
-        msg = MIMEText(body)
-        msg['Subject'] = subject
-        msg['From'] = "noreply@winworldtech.com"
-        msg['To'] = email
-
-        smtp_server = "smtp.gmail.com"
-        smtp_port = 587
-        smtp_user = os.getenv('SMTP_EMAIL')
-        smtp_password = os.getenv('SMTP_PASSWORD')
-
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-
-        return jsonify({"message": "OTP sent to your email"}), 200
-
-    except Exception as e:
-        print("SMTP Error:", e)
-        return jsonify({"error": "Failed to send OTP"}), 500
-
-
-# ------------------ Verify OTP ------------------
-@auth_bp.route("/verify-otp", methods=["POST"])
-def verify_otp():
-    data = request.get_json()
-    email = data.get("email")
-    otp = int(data.get("otp"))
-
-    if email not in otp_storage:
-        return jsonify({"error": "OTP not requested"}), 400
-
-    if datetime.utcnow() > otp_storage[email]["expires"]:
-        return jsonify({"error": "OTP expired"}), 400
-
-    if otp != otp_storage[email]["otp"]:
-        return jsonify({"error": "Invalid OTP"}), 400
-
-    return jsonify({"message": "OTP verified"}), 200
-
-
-# ------------------ Reset Password ------------------
-@auth_bp.route("/reset-password", methods=["POST"])
-def reset_password():
-    data = request.get_json()
-    email = data.get("email")
-    new_password = data.get("password")
-
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    user.password = generate_password_hash(new_password)
-    db.session.commit()
-
-    if email in otp_storage:
-        otp_storage.pop(email)
-
-    return jsonify({"message": "Password reset successful"}), 200
-
-
 #----------------------user details-------------------------------
 
 @auth_bp.route("/users/<int:user_id>", methods=["GET"])
@@ -209,3 +93,197 @@ def get_user(user_id):
         "email": user.email,
         "created_at": user.created_at
     })
+
+
+# --- In-memory OTP storage ---
+otp_storage = {}
+
+# --- Constants ---
+OTP_EXPIRY_MINUTES = 5
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_SENDER = os.getenv("SMTP_EMAIL")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+
+
+# ==============================
+# 🔹 Helper: Send Email via SMTP
+# ==============================
+def send_email(recipient, subject, body):
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = SMTP_SENDER
+    msg["To"] = recipient
+
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_SENDER, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+# ==============================
+# 🔹 Helper: Generate & Store OTP
+# ==============================
+def generate_and_store_otp(email):
+    otp = random.randint(100000, 999999)
+    otp_storage[email] = {
+        "otp": otp,
+        "expires": datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+    }
+    return otp
+
+
+# ==============================
+# 🔹 Helper: Validate OTP
+# ==============================
+def validate_otp(email, otp):
+    if email not in otp_storage:
+        return "OTP not requested"
+    record = otp_storage[email]
+    if datetime.utcnow() > record["expires"]:
+        otp_storage.pop(email, None)
+        return "OTP expired"
+    if int(otp) != record["otp"]:
+        return "Invalid OTP"
+    otp_storage.pop(email, None)
+    return None  # Means valid
+
+
+# ==============================
+# 🔹 Signup with OTP (2-step)
+# ==============================
+@auth_bp.route("/signup", methods=["POST", "OPTIONS"])
+def signup():
+    if request.method == "OPTIONS":
+        return '', 204
+
+    data = request.get_json()
+    email = data.get("email")
+    username = data.get("username")
+    password = data.get("password")
+
+    if not all([email, username, password]):
+        return jsonify({"error": "All fields required"}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({"error": "User already exists"}), 400
+
+    # Store user temporarily until OTP verified
+    hashed_pw = generate_password_hash(password)
+    otp = generate_and_store_otp(email)
+
+    try:
+        subject = "Verify Your Account"
+        body = (
+            f"Hello {username},\n\n"
+            f"Your OTP for account verification is: {otp}\n"
+            f"It is valid for {OTP_EXPIRY_MINUTES} minutes."
+        )
+        send_email(email, subject, body)
+        return jsonify({
+            "message": "OTP sent to your email for verification",
+            "temp_user": {"email": email, "username": username, "password": hashed_pw}
+        }), 200
+    except Exception as e:
+        print("SMTP Error:", e)
+        return jsonify({"error": "Failed to send OTP"}), 500
+
+
+@auth_bp.route("/verify-signup-otp", methods=["POST"])
+def verify_signup_otp():
+    data = request.get_json()
+    email = data.get("email")
+    otp = data.get("otp")
+    username = data.get("username")
+    password = data.get("password")
+
+    if not all([email, otp, username, password]):
+        return jsonify({"error": "Missing data"}), 400
+
+    error = validate_otp(email, otp)
+    if error:
+        return jsonify({"error": error}), 400
+
+    # OTP is valid → create the user
+    new_user = User(username=username, email=email, password=password)
+    db.session.add(new_user)
+    db.session.commit()
+
+    token = create_access_token(identity=str(new_user.userId))
+    return jsonify({
+        "message": "Signup successful",
+        "token": token,
+        "user": {"id": new_user.userId, "email": email}
+    }), 200
+
+
+# ==============================
+# 🔹 Forgot Password
+# ==============================
+@auth_bp.route("/forgot-password", methods=["POST"])
+def forgot_password():
+    data = request.get_json()
+    email = data.get("email")
+
+    if not email:
+        return jsonify({"error": "Email required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    otp = generate_and_store_otp(email)
+    try:
+        subject = "Password Reset OTP"
+        body = (
+            f"Hello {user.username},\n\n"
+            f"Your OTP for password reset is: {otp}\n"
+            f"It is valid for {OTP_EXPIRY_MINUTES} minutes."
+        )
+        send_email(email, subject, body)
+        return jsonify({"message": "OTP sent to your email"}), 200
+    except Exception as e:
+        print("SMTP Error:", e)
+        return jsonify({"error": "Failed to send OTP"}), 500
+
+
+# ==============================
+# 🔹 Verify OTP (common endpoint)
+# ==============================
+@auth_bp.route("/verify-otp", methods=["POST"])
+def verify_otp():
+    data = request.get_json()
+    email = data.get("email")
+    otp = data.get("otp")
+
+    if not email or not otp:
+        return jsonify({"error": "Email and OTP required"}), 400
+
+    error = validate_otp(email, otp)
+    if error:
+        return jsonify({"error": error}), 400
+
+    return jsonify({"message": "OTP verified"}), 200
+
+
+# ==============================
+# 🔹 Reset Password
+# ==============================
+@auth_bp.route("/reset-password", methods=["POST"])
+def reset_password():
+    data = request.get_json()
+    email = data.get("email")
+    new_password = data.get("password")
+
+    if not all([email, new_password]):
+        return jsonify({"error": "Email and new password required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    user.password = generate_password_hash(new_password)
+    db.session.commit()
+
+    otp_storage.pop(email, None)
+    return jsonify({"message": "Password reset successful"}), 200
