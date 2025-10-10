@@ -11,6 +11,7 @@ from flask import send_file
 import boto3
 from dotenv import load_dotenv
 from sqlalchemy.orm import joinedload
+from werkzeug.utils import secure_filename
 
 load_dotenv()
 videos_bp = Blueprint('videos', __name__)
