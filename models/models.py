@@ -24,7 +24,7 @@ class Device(db.Model):
 
     device_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     device_code = db.Column(db.String(100), unique=True, nullable=False)
-    device_token = db.Column(db.String(100), unique=True, nullable=True)  # One-time registration token
+    device_token = db.Column(db.String(100), unique=True, nullable=True)  # One-time registration 
     status = db.Column(db.String(20), default="inactive")  
     last_seen = db.Column(db.DateTime, nullable=True)
     current_video_id = db.Column(db.Integer, db.ForeignKey('videos.video_id'), nullable=True)

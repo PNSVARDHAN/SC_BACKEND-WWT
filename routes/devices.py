@@ -151,46 +151,58 @@ def update_device_status():
 
     return jsonify({"message": "Status updated successfully"}), 200
 
-
 @devices_bp.route('/list', methods=['GET'])
 @jwt_required()
 def list_devices():
-    # Get the raw token identity
+    """
+    Return all devices belonging to the logged-in user,
+    including playback status and currently playing video info.
+    """
     user_id = get_jwt_identity()
-    print("JWT identity:", user_id, type(user_id))
-    print("Request headers:", request.headers)
-    
-    # Get the full JWT claims
-    jwt_claims = get_jwt()
-    print("JWT claims:", jwt_claims)
-
-    # Validate user_id
     try:
-        # Always convert to string first, then to int
-        user_id_str = str(user_id)
-        user_id = int(user_id_str)
+        user_id = int(str(user_id))
     except (TypeError, ValueError):
-        return jsonify({
-            "error": f"Invalid user ID in token: {user_id}",
-            "type": str(type(user_id))
-        }), 422
+        return jsonify({"error": "Invalid user ID"}), 422
 
-    from models.models import User 
+    from models.models import User, Device, Video
     user = User.query.filter_by(userId=user_id).first()
     if not user:
         return jsonify({"error": "User not found"}), 404
 
     devices = Device.query.filter_by(user_id=user.userId).all()
-    device_list = [{
-        'device_id': d.device_id,
-        'device_code': d.device_code,
-        'status': d.status,
-        'last_seen': d.last_seen.isoformat() if d.last_seen else None,
-        'playback_state': d.playback_state,
-        'current_video_id': d.current_video_id
-    } for d in devices]
+    if not devices:
+        return jsonify({"devices": []}), 200
 
-    print(device_list)
+    device_list = []
+    now = datetime.utcnow()
+
+    for d in devices:
+        # Determine "active" or "inactive" dynamically (last seen < 20 sec)
+        is_active = (
+            d.last_seen and (now - d.last_seen).total_seconds() < 20
+        )
+        status = "active" if is_active else "inactive"
+
+        # Fetch video info if available
+        current_video = None
+        if d.current_video_id:
+            video = Video.query.filter_by(video_id=d.current_video_id).first()
+            if video:
+                current_video = {
+                    "video_id": video.video_id,
+                    "title": video.title,
+                    "description": video.description,
+                    "video_link": video.video_link,
+                }
+
+        device_list.append({
+            "device_id": d.device_id,
+            "device_code": d.device_code,
+            "status": status,
+            "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+            "playback_state": d.playback_state,
+            "current_video": current_video or None
+        })
 
     return jsonify({"devices": device_list}), 200
 
@@ -279,4 +291,46 @@ def update_download_status():
     return jsonify({"message": "Download status updated"})
 
 
-#---------------------------------------------------------------------------------------------------
+@devices_bp.route("/update-playback", methods=["POST"])
+def update_playback():
+    """
+    Called by the Pi to report current video and playback status.
+    """
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    token = data.get("device_token")
+    video_id = data.get("video_id")
+    playback_state = data.get("playback_state", "playing")
+
+    if not token:
+        return jsonify({"error": "Missing device_token"}), 400
+
+    device = Device.query.filter_by(device_token=token).first()
+    if not device:
+        return jsonify({"error": "Device not found"}), 404
+
+    # Optional: validate playback_state
+    valid_states = {"playing", "paused", "stopped"}
+    if playback_state not in valid_states:
+        return jsonify({"error": f"Invalid playback_state '{playback_state}'"}), 400
+
+    # Update playback info
+    device.last_seen = datetime.utcnow()
+    device.status = "active" if playback_state == "playing" else "idle"
+    device.playback_state = playback_state
+    device.current_video_id = video_id
+
+    db.session.commit()
+
+    return jsonify({
+        "message": "Playback state updated",
+        "device_code": device.device_code,
+        "last_seen": device.last_seen.isoformat()
+    }), 200
+
+
+
+#-----------------------------------------------------------------

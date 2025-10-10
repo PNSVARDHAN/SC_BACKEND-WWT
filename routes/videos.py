@@ -2,13 +2,15 @@
 import os
 from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.models import Video
+from models.models import Video , Schedule , ScheduleVideo ,Device
+from datetime import datetime, timedelta
 from extensions import db
 from datetime import datetime
 import io
 from flask import send_file
 import boto3
 from dotenv import load_dotenv
+from sqlalchemy.orm import joinedload
 
 load_dotenv()
 videos_bp = Blueprint('videos', __name__)
@@ -199,6 +201,61 @@ def set_default_video(video_id):
 
 #-----------------------____________________________________---------------------------------
 
+
+@videos_bp.route("/my-next-videos", methods=["GET"])
+@jwt_required()
+def get_user_next_videos():
+    """Return next scheduled videos for the logged-in user"""
+    user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    # Step 1: Fetch upcoming schedules for user's devices
+    upcoming_schedules = (
+        db.session.query(Schedule)
+        .join(Device, Device.device_id == Schedule.device_id)
+        .filter(Device.user_id == user_id)
+        .filter(Schedule.start_time >= now)
+        .filter(Schedule.is_active == True)
+        .order_by(Schedule.start_time.asc())
+        .all()
+    )
+
+    result = []
+    for schedule in upcoming_schedules:
+        # Step 2: Get videos in schedule group
+        schedule_videos = (
+            db.session.query(ScheduleVideo)
+            .filter(ScheduleVideo.schedule_group_id == schedule.schedule_group_id)
+            .order_by(ScheduleVideo.order_index.asc())
+            .options(joinedload(ScheduleVideo.video))
+            .all()
+        )
+
+        current_time = schedule.start_time
+        for sv in schedule_videos:
+            result.append({
+                "videoId": sv.video.video_id,
+                "title": sv.video.title,
+                "description": sv.video.description,
+                "duration": sv.video.duration,
+                "startTime": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "endTime": (current_time + timedelta(seconds=sv.video.duration or 0)).strftime("%Y-%m-%d %H:%M:%S"),
+                "deviceId": schedule.device_id,
+                "scheduleGroupId": schedule.schedule_group_id,
+                "videoUrl": f"/videos/{sv.video.video_id}/stream"
+            })
+
+            # Move current_time forward for the next video
+            if sv.video.duration:
+                current_time += timedelta(seconds=sv.video.duration)
+
+        # Optional: only show first schedule if you want next video only
+        # break
+
+    return jsonify(result), 200
+
+
+#____________________________---------------------------______________________________________
 # THIS API IS USED TO STORE THE VIDEOS IN SERVER SIDE 
 
 # from werkzeug.utils import secure_filename
@@ -391,5 +448,5 @@ def set_default_video(video_id):
 #     return jsonify({"message": f"{video.title} set as default"})
 
 
-# #-------------END FOR STORING VIDEOS IN SERVER -----------------
+#-------------END FOR STORING VIDEOS IN SERVER -----------------
 
