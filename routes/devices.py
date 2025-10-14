@@ -73,34 +73,98 @@ def create_device():
 #_________________downloading the config file ------------------------------------
 
 
+import io
+import json
+import zipfile
+import os
+from flask import jsonify, send_file, request
+from flask_jwt_extended import jwt_required
+
 @devices_bp.route('/<int:device_id>/download-config', methods=['GET'])
 @jwt_required()
 def download_device_config(device_id):
-    # Fetch the device
-    device = Device.query.get(device_id)
-    if not device:
-        return jsonify({"error": "Device not found"}), 404
+    try:
+        # Fetch the device from database
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
 
-    # Prepare config
-    config = {
-        "backend_url": request.host_url.rstrip('/'),
-        "device_code": device.device_code,
-        "device_token": device.device_token,
-        "api_version": "1.0"
-    }
+        # Prepare device-specific config
+        config = {
+            "backend_url": request.host_url.rstrip('/'),
+            "device_code": device.device_code,
+            "device_token": device.device_token,
+            "api_version": "1.0"
+        }
 
-    # Create config file in memory
-    config_file = io.StringIO()
-    json.dump(config, config_file, indent=2)
-    config_file.seek(0)
+        python_file_path = os.path.join(os.path.dirname(__file__), "..", "PI", "device_app.py")
+        python_file_path = os.path.abspath(python_file_path)
+        print(f"[INFO] Reading Python file from: {python_file_path}")
 
-    # Send as downloadable file
-    return send_file(
-        io.BytesIO(config_file.getvalue().encode()),
-        mimetype='application/json',
-        as_attachment=True,
-        download_name=f'device_{device.device_code}_config.json'
-    )
+        if not os.path.exists(python_file_path):
+            return jsonify({"error": f"Python file not found at {python_file_path}"}), 500
+
+        # Read Python file as text (do NOT import it)
+        with open(python_file_path, "r", encoding="utf-8") as f:
+            python_code = f.read()
+
+        # ---------------- Start scripts ----------------
+        start_sh = "#!/bin/bash\npython3 device_app.py\n"
+        start_bat = "@echo off\npython device_app.py\npause\n"
+
+        # ---------------- Create in-memory ZIP ----------------
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("config.json", json.dumps(config, indent=2))
+            zip_file.writestr("device_app.py", python_code)
+            zip_file.writestr("start.sh", start_sh)
+
+        zip_buffer.seek(0)
+
+        # ---------------- Send ZIP file ----------------
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f"device_{device.device_code}_package.zip"
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# @devices_bp.route('/<int:device_id>/download-config', methods=['GET'])
+# @jwt_required()
+# def download_device_config(device_id):
+#     # Fetch the device
+#     device = Device.query.get(device_id)
+#     if not device:
+#         return jsonify({"error": "Device not found"}), 404
+
+#     # Prepare config
+#     config = {
+#         "backend_url": request.host_url.rstrip('/'),
+#         "device_code": device.device_code,
+#         "device_token": device.device_token,
+#         "api_version": "1.0"
+#     }
+
+#     # Create config file in memory
+#     config_file = io.StringIO()
+#     json.dump(config, config_file, indent=2)
+#     config_file.seek(0)
+
+#     # Send as downloadable file
+#     return send_file(
+#         io.BytesIO(config_file.getvalue().encode()),
+#         mimetype='application/json',
+#         as_attachment=True,
+#         download_name=f'config.json'
+#     )
 
 @devices_bp.route('/register', methods=['POST'])
 def register_device():
