@@ -92,7 +92,7 @@ def download_video(video_id, video_url, title):
         return local_path
     try:
         print(f"[DOWNLOADING] {title} from {video_url}")
-        resp = requests.get({video_url}, stream=True, timeout=60)
+        resp = requests.get(video_url, stream=True, timeout=60)
         resp.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
