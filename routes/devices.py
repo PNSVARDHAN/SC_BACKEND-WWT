@@ -72,7 +72,6 @@ def create_device():
 
 #_________________downloading the config file ------------------------------------
 
-
 import io
 import json
 import zipfile
@@ -84,7 +83,7 @@ from flask_jwt_extended import jwt_required
 @jwt_required()
 def download_device_config(device_id):
     try:
-        # Fetch the device from database
+        # Fetch the device
         device = Device.query.get(device_id)
         if not device:
             return jsonify({"error": "Device not found"}), 404
@@ -97,6 +96,7 @@ def download_device_config(device_id):
             "api_version": "1.0"
         }
 
+        # ---------------- Server-friendly Python file path ----------------
         python_file_path = os.path.join(os.path.dirname(__file__), "..", "PI", "device_app.py")
         python_file_path = os.path.abspath(python_file_path)
         print(f"[INFO] Reading Python file from: {python_file_path}")
@@ -104,13 +104,13 @@ def download_device_config(device_id):
         if not os.path.exists(python_file_path):
             return jsonify({"error": f"Python file not found at {python_file_path}"}), 500
 
-        # Read Python file as text (do NOT import it)
+        # Read Python file as text
         with open(python_file_path, "r", encoding="utf-8") as f:
             python_code = f.read()
 
         # ---------------- Start scripts ----------------
-        start_sh = "#!/bin/bash\npython3 device_app.py\n"
-        start_bat = "@echo off\npython device_app.py\npause\n"
+        start_sh = "#!/bin/bash\npython3 device_app.py\n"  # Shebang ensures Linux runs it correctly
+        start_bat = "@echo off\npython device_app.py\npause\n"  # For Windows users
 
         # ---------------- Create in-memory ZIP ----------------
         zip_buffer = io.BytesIO()
@@ -118,6 +118,7 @@ def download_device_config(device_id):
             zip_file.writestr("config.json", json.dumps(config, indent=2))
             zip_file.writestr("device_app.py", python_code)
             zip_file.writestr("start.sh", start_sh)
+            zip_file.writestr("start.bat", start_bat)
 
         zip_buffer.seek(0)
 
@@ -133,6 +134,7 @@ def download_device_config(device_id):
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 
 
