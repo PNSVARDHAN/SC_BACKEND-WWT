@@ -256,52 +256,43 @@ def get_user_next_videos():
     return jsonify(result), 200
 
 
-from urllib.parse import urlparse
-
 @videos_bp.route("/delete/<int:video_id>", methods=["DELETE"])
 @jwt_required()
 def delete_video(video_id):
+    user_id = get_jwt_identity()
     try:
-        user_id = get_jwt_identity()
-        # Fetch the video for this user
         video = Video.query.filter_by(video_id=video_id, user_id=user_id).first()
-
         if not video:
             return jsonify({"msg": "Video not found"}), 404
 
-        # Delete video from Cloudflare R2 if a link exists
+        # Delete from Cloudflare R2 if video link exists
         if video.video_link:
-            # Parse the URL to get bucket name and object key
-            parsed_url = urlparse(video.video_link)
-            path_parts = parsed_url.path.lstrip("/").split("/", 1)  # ["bucket", "key"]
-            if len(path_parts) != 2:
-                return jsonify({"msg": "Invalid video URL"}), 400
-
-            bucket_name, object_key = path_parts
-
-            # Initialize R2 client
-            r2 = boto3.client(
-                "s3",
-                endpoint_url="https://<YOUR_ACCOUNT_ID>.r2.cloudflarestorage.com",
-                aws_access_key_id="<YOUR_R2_ACCESS_KEY>",
-                aws_secret_access_key="<YOUR_R2_SECRET_KEY>"
-            )
-
             try:
-                r2.delete_object(Bucket=bucket_name, Key=object_key)
-                print(f"[INFO] Deleted {object_key} from bucket {bucket_name} successfully")
+                video_key = video.video_link.split(".r2.dev/")[-1]
+                print(f"[DEBUG] Deleting R2 object: {video_key}")
+
+                r2 = boto3.client(
+                    "s3",
+                    endpoint_url=PUBLIC_BASE_URL,
+                    aws_access_key_id="YOUR_R2_ACCESS_KEY",
+                    aws_secret_access_key="YOUR_R2_SECRET_KEY"
+                )
+                r2.delete_object(Bucket="YOUR_BUCKET_NAME", Key=video_key)
+                print(f"[INFO] Deleted {video_key} from R2")
             except Exception as e:
                 print(f"[WARN] Failed to delete from R2: {e}")
+                # Optionally continue, or raise e to stop deletion
+                # raise e
 
-        # Remove references from devices currently playing this video
+        # Remove video references from devices
         devices_using_video = Device.query.filter_by(current_video_id=video_id).all()
-        for device in devices_using_video:
-            device.current_video_id = None
+        for d in devices_using_video:
+            d.current_video_id = None
 
         # Delete all schedule mappings for this video
         ScheduleVideo.query.filter_by(video_id=video_id).delete()
 
-        # Delete video record from database
+        # Delete the video from DB
         db.session.delete(video)
         db.session.commit()
 
@@ -309,8 +300,9 @@ def delete_video(video_id):
 
     except Exception as e:
         db.session.rollback()
-        print(f"[ERROR] {str(e)}")
+        print(f"[ERROR] Exception deleting video {video_id}: {e}")
         return jsonify({"msg": f"Error deleting video: {str(e)}"}), 500
+
 
     
 
