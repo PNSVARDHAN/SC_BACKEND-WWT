@@ -256,6 +256,49 @@ def get_user_next_videos():
     return jsonify(result), 200
 
 
+@videos_bp.route("/delete/<int:video_id>", methods=["DELETE"])
+@jwt_required()
+def delete_video(video_id):
+    try:
+        user_id = get_jwt_identity()
+        video = Video.query.filter_by(video_id=video_id, user_id=user_id).first()
+
+        if not video:
+            return jsonify({"msg": "Video not found"}), 404
+
+        if video.video_link:
+            video_key = video.video_link.split(".r2.dev/")[-1]
+
+            # Delete from Cloudflare R2
+            r2 = boto3.client(
+                "s3",
+                endpoint_url = PUBLIC_BASE_URL,
+                aws_access_key_id="YOUR_R2_ACCESS_KEY",
+                aws_secret_access_key="YOUR_R2_SECRET_KEY"
+            )
+            try:
+                r2.delete_object(Bucket="YOUR_BUCKET_NAME", Key=video_key)
+            except Exception as e:
+                print(f"[WARN] Failed to delete from R2: {e}")
+
+        # Remove links in Device table (if device is playing this video)
+        devices_using_video = Device.query.filter_by(current_video_id=video_id).all()
+        for d in devices_using_video:
+            d.current_video_id = None
+
+        # Delete all schedule mappings for this video
+        ScheduleVideo.query.filter_by(video_id=video_id).delete()
+
+        # Finally delete the video itself
+        db.session.delete(video)
+        db.session.commit()
+
+        return jsonify({"msg": "Video deleted successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"Error deleting video: {str(e)}"}), 500
+
 #____________________________---------------------------______________________________________
 # THIS API IS USED TO STORE THE VIDEOS IN SERVER SIDE 
 

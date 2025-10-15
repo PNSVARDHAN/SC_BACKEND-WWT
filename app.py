@@ -66,8 +66,7 @@ def create_app(test_config=None):
     CORS(
         app,
         resources={r"/*": {"origins": [
-            "https://68cb8c1636f2.ngrok-free.app",
-            "http://192.168.137.1:5173","*"
+            "*","http://192.168.43.35:5000"
         ]}},
 
         supports_credentials=True,
