@@ -274,15 +274,13 @@ def delete_video(video_id):
                 r2 = boto3.client(
                     "s3",
                     endpoint_url=PUBLIC_BASE_URL,
-                    aws_access_key_id="YOUR_R2_ACCESS_KEY",
-                    aws_secret_access_key="YOUR_R2_SECRET_KEY"
+                    aws_access_key_id="R2_ACCESS_KEY_ID",
+                    aws_secret_access_key="R2_SECRET_ACCESS_KEY"
                 )
-                r2.delete_object(Bucket="YOUR_BUCKET_NAME", Key=video_key)
+                r2.delete_object(Bucket="R2_BUCKET_NAME", Key=video_key)
                 print(f"[INFO] Deleted {video_key} from R2")
             except Exception as e:
                 print(f"[WARN] Failed to delete from R2: {e}")
-                # Optionally continue, or raise e to stop deletion
-                # raise e
 
         # Remove video references from devices
         devices_using_video = Device.query.filter_by(current_video_id=video_id).all()
