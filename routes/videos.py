@@ -202,20 +202,25 @@ def set_default_video(video_id):
 
 #-----------------------____________________________________---------------------------------
 
+from datetime import datetime, timedelta
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy.orm import joinedload
 
 @videos_bp.route("/my-next-videos", methods=["GET"])
 @jwt_required()
 def get_user_next_videos():
-    """Return next scheduled videos for the logged-in user"""
+    """Return next scheduled videos for the logged-in user using local time"""
     user_id = get_jwt_identity()
-    now = datetime.utcnow()
+    # Get current local time
+    now = datetime.now()
+    print("Current local time:", now)
 
-    # Step 1: Fetch upcoming schedules for user's devices
+    # Fetch upcoming schedules for user's devices
     upcoming_schedules = (
         db.session.query(Schedule)
         .join(Device, Device.device_id == Schedule.device_id)
         .filter(Device.user_id == user_id)
-        .filter(Schedule.start_time >= now)
         .filter(Schedule.is_active == True)
         .order_by(Schedule.start_time.asc())
         .all()
@@ -223,7 +228,9 @@ def get_user_next_videos():
 
     result = []
     for schedule in upcoming_schedules:
-        # Step 2: Get videos in schedule group
+        current_time = schedule.start_time  # already in local time
+
+        # Get videos in schedule group
         schedule_videos = (
             db.session.query(ScheduleVideo)
             .filter(ScheduleVideo.schedule_group_id == schedule.schedule_group_id)
@@ -232,28 +239,33 @@ def get_user_next_videos():
             .all()
         )
 
-        current_time = schedule.start_time
         for sv in schedule_videos:
+            video_duration = sv.video.duration or 0
+            video_end_time = current_time + timedelta(seconds=video_duration)
+
+            # Skip video if it has already ended
+            if video_end_time < now:
+                current_time = video_end_time
+                continue
+
             result.append({
                 "videoId": sv.video.video_id,
                 "title": sv.video.title,
                 "description": sv.video.description,
                 "duration": sv.video.duration,
                 "startTime": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "endTime": (current_time + timedelta(seconds=sv.video.duration or 0)).strftime("%Y-%m-%d %H:%M:%S"),
+                "endTime": video_end_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "deviceId": schedule.device_id,
                 "scheduleGroupId": schedule.schedule_group_id,
-                "videoUrl": f"/videos/{sv.video.video_id}/stream"
+                "videoUrl": sv.video.video_link
             })
 
-            # Move current_time forward for the next video
-            if sv.video.duration:
-                current_time += timedelta(seconds=sv.video.duration)
-
-        # Optional: only show first schedule if you want next video only
-        # break
+            current_time = video_end_time  # move forward for next video
 
     return jsonify(result), 200
+
+
+
 
 
 @videos_bp.route("/delete/<int:video_id>", methods=["DELETE"])
