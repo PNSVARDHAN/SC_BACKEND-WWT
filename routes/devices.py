@@ -185,8 +185,6 @@ from models.models import User, Device, Video
 from datetime import datetime
 import pytz
 
-devices_bp = Blueprint("devices_bp", __name__)
-
 # Timezones
 IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.UTC
