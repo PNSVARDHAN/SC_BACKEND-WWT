@@ -177,32 +177,55 @@ def update_device_status():
 
     return jsonify({"message": "Status updated successfully"}), 200
 
+
+from flask import Blueprint, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from extensions import db
+from models.models import User, Device, Video
+from datetime import datetime
+import pytz
+
+devices_bp = Blueprint("devices_bp", __name__)
+
+# Timezones
+IST = pytz.timezone("Asia/Kolkata")
+UTC = pytz.UTC
+
 @devices_bp.route('/list', methods=['GET'])
 @jwt_required()
 def list_devices():
-    user_id = get_jwt_identity()
+    # Get user ID from JWT
     try:
-        user_id = int(str(user_id))
+        user_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid user ID"}), 422
 
+    # Fetch user
     user = User.query.filter_by(userId=user_id).first()
     if not user:
         return jsonify({"error": "User not found"}), 404
 
+    # Fetch devices for the user
     devices = Device.query.filter_by(user_id=user.userId).all()
     if not devices:
         return jsonify({"devices": []}), 200
 
-    device_list = []
-    now = datetime.now(IST)  # IST-aware
+    # Current UTC time (aware)
+    now = datetime.utcnow().replace(tzinfo=UTC)
 
+    device_list = []
     for d in devices:
-        is_active = (
-            d.last_seen and (now - d.last_seen).total_seconds() < 20
-        )
+        last_seen = d.last_seen
+        if last_seen:
+            # Convert naive DB datetime to UTC aware
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=UTC)
+        
+        # Determine device status
+        is_active = last_seen and (now - last_seen).total_seconds() < 20
         status = "active" if is_active else "inactive"
 
+        # Get current video if any
         current_video = None
         if d.current_video_id:
             video = Video.query.filter_by(video_id=d.current_video_id).first()
@@ -218,12 +241,13 @@ def list_devices():
             "device_id": d.device_id,
             "device_code": d.device_code,
             "status": status,
-            "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+            "last_seen": last_seen.astimezone(IST).isoformat() if last_seen else None,
             "playback_state": d.playback_state,
             "current_video": current_video or None
         })
 
     return jsonify({"devices": device_list}), 200
+
 
 #------------------------------ API FOR PI -------------------------------------
 
