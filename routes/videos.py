@@ -1,11 +1,10 @@
 # videos.py
 import os
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify, Response, redirect
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.models import Video , Schedule , ScheduleVideo ,Device
-from datetime import datetime, timedelta
+from models.models import Video, Schedule, ScheduleVideo, Device
+from datetime import datetime, timedelta, timezone
 from extensions import db
-from datetime import datetime
 import io
 from flask import send_file
 import boto3
@@ -18,18 +17,19 @@ videos_bp = Blueprint('videos', __name__)
 
 ALLOWED_EXT = {'mp4', 'mov', 'mkv', 'avi'}
 
+# ---------------- IST TIMEZONE ----------------
+IST = timezone(timedelta(hours=5, minutes=30))
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.',1)[1].lower() in ALLOWED_EXT
 
-#_______________ THIS IS USED TO STORE VIDEOS IN CLOUDFARE _______________________________
-
+# Cloudflare R2 config
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 R2_ENDPOINT_URL = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
-# Create boto3 client for R2 (S3-compatible)
 s3_client = boto3.client(
     "s3",
     endpoint_url=R2_ENDPOINT_URL,
@@ -37,10 +37,9 @@ s3_client = boto3.client(
     aws_secret_access_key=R2_SECRET_ACCESS_KEY,
 )
 
-# Public Development URL from Cloudflare R2 Dashboard
 PUBLIC_BASE_URL = "https://pub-cafffcbfe1b04cb4bc378666a1eefad2.r2.dev"
 
-
+# ---------------- Upload Video ----------------
 @videos_bp.route("/upload", methods=["POST"])
 @jwt_required()
 def upload_video():
@@ -60,11 +59,8 @@ def upload_video():
             title = filename
 
         duration = int(duration) if duration else None
-
-        # Define R2 object key (path inside bucket)
         object_key = f"videos/{user_id}/{filename}"
 
-        # Upload to Cloudflare R2
         s3_client.upload_fileobj(
             file,
             R2_BUCKET_NAME,
@@ -72,15 +68,13 @@ def upload_video():
             ExtraArgs={"ContentType": file.content_type}
         )
 
-        # Public URL (accessible via Public Development URL)
         video_link = f"{PUBLIC_BASE_URL}/{object_key}"
 
-        # Save metadata in the database
         video = Video(
             title=title,
             description=description,
             video_link=video_link,
-            uploaded_at=datetime.utcnow(),
+            uploaded_at=datetime.now(IST),
             user_id=user_id,
             is_default=is_default,
             duration=duration
@@ -101,12 +95,10 @@ def upload_video():
         db.session.rollback()
         return jsonify({"msg": f"Upload failed: {str(e)}"}), 500
 
-    
-
+# ---------------- Get User Videos ----------------
 @videos_bp.route("/my-videos", methods=["GET"])
 @jwt_required()
 def get_user_videos():
-    """Return metadata + R2 URLs for user videos"""
     user_id = get_jwt_identity()
     videos = Video.query.filter_by(user_id=user_id).all()
 
@@ -119,36 +111,25 @@ def get_user_videos():
             "title": v.title,
             "description": v.description,
             "duration": v.duration,
-            "uploadedAt": v.uploaded_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "videoUrl": v.video_link  # Direct R2 public link
+            "uploadedAt": v.uploaded_at.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "videoUrl": v.video_link
         }
         for v in videos
     ]
     return jsonify(result), 200
 
-
-# =============================
-# Stream Video (redirect to R2)
-# =============================
+# ---------------- Stream Video ----------------
 @videos_bp.route("/<int:video_id>/stream", methods=["GET"])
 def stream_video(video_id):
-    """Redirect to R2 public video URL (no local files)"""
     video = Video.query.get_or_404(video_id)
-
     if not video.video_link:
         return jsonify({"msg": "No video link found"}), 404
-
-    # Simply redirect to the R2-hosted file
     return redirect(video.video_link, code=302)
 
-
-# =============================
-# Download Video (Presigned URL)
-# =============================
+# ---------------- Download Video ----------------
 @videos_bp.route("/<int:video_id>/download", methods=["GET"])
 @jwt_required()
 def download_video(video_id):
-    """Generate temporary download URL for user's own video"""
     video = Video.query.get_or_404(video_id)
     user_id = get_jwt_identity()
 
@@ -156,35 +137,27 @@ def download_video(video_id):
         return jsonify({"msg": "Forbidden"}), 403
 
     try:
-        # Extract R2 object key from stored URL
         object_key = video.video_link.split(f".r2.cloudflarestorage.com/")[-1]
-
         presigned_url = s3_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": R2_BUCKET_NAME, "Key": object_key},
-            ExpiresIn=300  # 5 minutes
+            ExpiresIn=300
         )
         return jsonify({"downloadUrl": presigned_url}), 200
-
     except Exception as e:
         return jsonify({"msg": f"Failed to generate download URL: {str(e)}"}), 500
 
-
-# =============================
-# Default Video
-# =============================
+# ---------------- Default Video ----------------
 @videos_bp.route("/default-video", methods=["GET"])
 def get_default_video():
     video = Video.query.filter_by(is_default=True).first()
     if not video:
         return jsonify({"error": "No default video found"}), 404
-
     return jsonify({
         "video_id": video.video_id,
         "title": video.title,
         "video_link": video.video_link
     })
-
 
 @videos_bp.route("/set-default/<int:video_id>", methods=["POST"])
 def set_default_video(video_id):
@@ -192,45 +165,32 @@ def set_default_video(video_id):
     if not video:
         return jsonify({"error": "Video not found"}), 404
 
-    # Reset all videos’ default flags
     Video.query.update({Video.is_default: False})
     video.is_default = True
     db.session.commit()
 
     return jsonify({"message": f"{video.title} set as default"})
 
-
-#-----------------------____________________________________---------------------------------
-
-from datetime import datetime, timedelta
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from sqlalchemy.orm import joinedload
-
+# ---------------- Next Scheduled Videos (IST) ----------------
 @videos_bp.route("/my-next-videos", methods=["GET"])
 @jwt_required()
 def get_user_next_videos():
-    """Return next scheduled videos for the logged-in user using local time"""
     user_id = get_jwt_identity()
-    # Get current local time
-    now = datetime.now()
-    print("Current local time:", now)
+    now = datetime.now(IST)
+    print("Current IST time:", now)
 
-    # Fetch upcoming schedules for user's devices
     upcoming_schedules = (
         db.session.query(Schedule)
         .join(Device, Device.device_id == Schedule.device_id)
-        .filter(Device.user_id == user_id)
-        .filter(Schedule.is_active == True)
+        .filter(Device.user_id == user_id, Schedule.is_active == True)
         .order_by(Schedule.start_time.asc())
         .all()
     )
 
     result = []
     for schedule in upcoming_schedules:
-        current_time = schedule.start_time  # already in local time
+        current_time = schedule.start_time.astimezone(IST) if schedule.start_time.tzinfo else schedule.start_time.replace(tzinfo=IST)
 
-        # Get videos in schedule group
         schedule_videos = (
             db.session.query(ScheduleVideo)
             .filter(ScheduleVideo.schedule_group_id == schedule.schedule_group_id)
@@ -243,7 +203,6 @@ def get_user_next_videos():
             video_duration = sv.video.duration or 0
             video_end_time = current_time + timedelta(seconds=video_duration)
 
-            # Skip video if it has already ended
             if video_end_time < now:
                 current_time = video_end_time
                 continue
@@ -260,14 +219,11 @@ def get_user_next_videos():
                 "videoUrl": sv.video.video_link
             })
 
-            current_time = video_end_time  # move forward for next video
+            current_time = video_end_time
 
     return jsonify(result), 200
 
-
-
-
-
+# ---------------- Delete Video ----------------
 @videos_bp.route("/delete/<int:video_id>", methods=["DELETE"])
 @jwt_required()
 def delete_video(video_id):
@@ -277,32 +233,24 @@ def delete_video(video_id):
         if not video:
             return jsonify({"msg": "Video not found"}), 404
 
-        # Delete from Cloudflare R2 if video link exists
         if video.video_link:
             try:
                 video_key = video.video_link.split(".r2.dev/")[-1]
-                print(f"[DEBUG] Deleting R2 object: {video_key}")
-
                 r2 = boto3.client(
                     "s3",
                     endpoint_url=PUBLIC_BASE_URL,
-                    aws_access_key_id="R2_ACCESS_KEY_ID",
-                    aws_secret_access_key="R2_SECRET_ACCESS_KEY"
+                    aws_access_key_id=R2_ACCESS_KEY_ID,
+                    aws_secret_access_key=R2_SECRET_ACCESS_KEY
                 )
-                r2.delete_object(Bucket="R2_BUCKET_NAME", Key=video_key)
-                print(f"[INFO] Deleted {video_key} from R2")
+                r2.delete_object(Bucket=R2_BUCKET_NAME, Key=video_key)
             except Exception as e:
                 print(f"[WARN] Failed to delete from R2: {e}")
 
-        # Remove video references from devices
         devices_using_video = Device.query.filter_by(current_video_id=video_id).all()
         for d in devices_using_video:
             d.current_video_id = None
 
-        # Delete all schedule mappings for this video
         ScheduleVideo.query.filter_by(video_id=video_id).delete()
-
-        # Delete the video from DB
         db.session.delete(video)
         db.session.commit()
 
@@ -310,49 +258,10 @@ def delete_video(video_id):
 
     except Exception as e:
         db.session.rollback()
-        print(f"[ERROR] Exception deleting video {video_id}: {e}")
         return jsonify({"msg": f"Error deleting video: {str(e)}"}), 500
 
-
     
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
+        
 
 #____________________________---------------------------______________________________________
 # THIS API IS USED TO STORE THE VIDEOS IN SERVER SIDE 

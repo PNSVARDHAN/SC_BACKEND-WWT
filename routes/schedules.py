@@ -1,11 +1,13 @@
 # schedules.py
 from flask import Blueprint, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.models import Schedule, Video, Device , ScheduleVideo
+from models.models import Schedule, Video, Device, ScheduleVideo
 from extensions import db
 import random
-    
+
+# Define IST timezone
+IST = timezone(timedelta(hours=5, minutes=30))
 
 schedules_bp = Blueprint('schedules', __name__)
 
@@ -19,7 +21,7 @@ def create_schedule_api():
     video = Video.query.get_or_404(data['video_id'])
     device = Device.query.get_or_404(data['device_id'])
 
-    # Debug logs to see why it's failing
+    # Debug logs
     print("JWT user_id:", user_id)
     print("Video user_id:", video.user_id, "Video ID:", video.video_id)
     print("Device user_id:", device.user_id, "Device ID:", device.device_id)
@@ -33,10 +35,9 @@ def create_schedule_api():
         print("Blocked: device does not belong to user")
         return jsonify({"msg": "not allowed"}), 403
 
-
-    # Create schedule
-    start_time = datetime.fromisoformat(data['start_time'])
-    end_time = datetime.fromisoformat(data['end_time']) if data.get('end_time') else None
+    # Convert incoming ISO timestamps to IST-aware datetime
+    start_time = datetime.fromisoformat(data['start_time']).astimezone(IST)
+    end_time = datetime.fromisoformat(data['end_time']).astimezone(IST) if data.get('end_time') else None
 
     s = Schedule(
         video_id=video.video_id,
@@ -54,9 +55,7 @@ def create_schedule_api():
     return jsonify({"schedule_id": s.schedule_id}), 201
 
 
-
-#---------------API FOR MUTIL VIDEO SCHEDULING ----------------------
-
+#---------------API FOR MULTI-VIDEO SCHEDULING ----------------------
 
 @schedules_bp.route('/create-multiple', methods=['POST'])
 @jwt_required()
@@ -75,15 +74,16 @@ def create_multiple_schedules():
         return jsonify({"msg": "Devices, Videos, and Start time are required"}), 400
 
     try:
-        start_time = datetime.fromisoformat(start_time_str)
-        end_time = datetime.fromisoformat(end_time_str) if end_time_str else None
+        # Convert to IST-aware datetime
+        start_time = datetime.fromisoformat(start_time_str).astimezone(IST)
+        end_time = datetime.fromisoformat(end_time_str).astimezone(IST) if end_time_str else None
 
         created_schedules = []
 
-        # Generate one group ID for this batch
-        schedule_group_id = int(datetime.utcnow().timestamp() * 1000)
+        # Generate one group ID for this batch (IST timestamp in ms)
+        schedule_group_id = int(datetime.now(IST).timestamp() * 1000)
 
-        # 1️⃣ Insert Schedule rows for each device
+        # Insert Schedule rows for each device
         for device_id in device_ids:
             device = Device.query.get(device_id)
             if not device:
@@ -103,7 +103,7 @@ def create_multiple_schedules():
             db.session.add(schedule)
             created_schedules.append(schedule)
 
-        # 2️⃣ Insert ScheduleVideo rows (shared for the group)
+        # Insert ScheduleVideo rows (shared for the group)
         for idx, video_id in enumerate(video_ids):
             video = Video.query.get(video_id)
             if not video:

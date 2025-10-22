@@ -5,110 +5,28 @@ from flask_jwt_extended import create_access_token
 from models.models import User
 import google.auth.transport.requests
 import google.oauth2.id_token
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 from werkzeug.security import generate_password_hash, check_password_hash
 import smtplib
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta
 
+# ---------------------------- IST TIMEZONE ----------------------------
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# ---------------------------- Blueprint ----------------------------
 auth_bp = Blueprint("auth", __name__)
 
-# ------------------ Login ------------------
-@auth_bp.route("/login", methods=["POST", "OPTIONS"])
-def login():
-    if request.method == "OPTIONS":
-        return '', 204
-
-    data = request.json
-    email = data.get("email")
-    password = data.get("password")
-
-    user = User.query.filter_by(email=email).first()
-
-    if not user:
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    # Google-login user without password
-    if not user.password:
-        return jsonify({
-            "error": "No password set. Use Forgot Password to set a password."
-        }), 400
-
-    if not check_password_hash(user.password, password):
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    # Create token with additional claims
-    user_id_str = str(user.userId)
-    print(f"Creating token with user_id: {user_id_str} (type: {type(user_id_str)})")
-    token = create_access_token(identity=str(user.userId))
-    print(f"Created token for user {user.userId} (email: {user.email})")
-    return jsonify({
-        "message": "Login successful", 
-        "token": token,
-        "user": {
-            "id": user.userId,
-        }
-    })
-
-# ------------------ Google Login ------------------
-@auth_bp.route("/google-login", methods=["POST", "OPTIONS"])
-def google_login():
-    if request.method == "OPTIONS":
-        return '', 204
-
-    token = request.json.get("token")
-
-    try:
-        id_info = google.oauth2.id_token.verify_oauth2_token(
-            token, google.auth.transport.requests.Request()
-        )
-
-        email = id_info.get("email")
-        google_id = id_info.get("sub")
-        name = id_info.get("name", "Google User")
-
-        user = User.query.filter_by(email=email).first()
-
-        if not user:
-            # New Google user, no password
-            user = User(username=name, email=email, google_id=google_id, password=None)
-            db.session.add(user)
-            db.session.commit()
-
-        access_token = create_access_token(identity=str(user.userId))
-        return jsonify({"message": "Google login successful", "token": access_token})
-
-    except Exception as e:
-        return jsonify({"error": "Invalid Google token", "details": str(e)}), 400
-
-#----------------------user details-------------------------------
-
-@auth_bp.route("/users/<int:user_id>", methods=["GET"])
-def get_user(user_id):
-    user = User.query.get_or_404(user_id)
-    return jsonify({
-        "userId": user.userId,
-        "username": user.username,
-        "email": user.email,
-        "created_at": user.created_at
-    })
-
-
-# --- In-memory OTP storage ---
+# ---------------------------- OTP STORAGE ----------------------------
 otp_storage = {}
-
-# --- Constants ---
 OTP_EXPIRY_MINUTES = 5
+
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_SENDER = os.getenv("SMTP_EMAIL")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
-
-# ==============================
-# 🔹 Helper: Send Email via SMTP
-# ==============================
+# ============================= Helper: Send Email =============================
 def send_email(recipient, subject, body):
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -120,38 +38,100 @@ def send_email(recipient, subject, body):
         server.login(SMTP_SENDER, SMTP_PASSWORD)
         server.send_message(msg)
 
-
-# ==============================
-# 🔹 Helper: Generate & Store OTP
-# ==============================
+# ============================= Helper: OTP =============================
 def generate_and_store_otp(email):
     otp = random.randint(100000, 999999)
     otp_storage[email] = {
         "otp": otp,
-        "expires": datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        "expires": datetime.now(IST) + timedelta(minutes=OTP_EXPIRY_MINUTES)
     }
+    print(f"[{datetime.now(IST)}] OTP {otp} generated for {email}")
     return otp
 
-
-# ==============================
-# 🔹 Helper: Validate OTP
-# ==============================
 def validate_otp(email, otp):
     if email not in otp_storage:
         return "OTP not requested"
     record = otp_storage[email]
-    if datetime.utcnow() > record["expires"]:
+    if datetime.now(IST) > record["expires"]:
         otp_storage.pop(email, None)
         return "OTP expired"
     if int(otp) != record["otp"]:
         return "Invalid OTP"
     otp_storage.pop(email, None)
-    return None  # Means valid
+    return None  # valid
 
+# ============================= Login =============================
+@auth_bp.route("/login", methods=["POST", "OPTIONS"])
+def login():
+    if request.method == "OPTIONS":
+        return '', 204
 
-# ==============================
-# 🔹 Signup with OTP (2-step)
-# ==============================
+    data = request.json
+    email = data.get("email")
+    password = data.get("password")
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    if not user.password:
+        return jsonify({"error": "No password set. Use Forgot Password to set a password."}), 400
+
+    if not check_password_hash(user.password, password):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    token = create_access_token(identity=str(user.userId))
+    return jsonify({
+        "message": "Login successful", 
+        "token": token,
+        "user": {"id": user.userId}
+    })
+
+# ============================= Google Login =============================
+@auth_bp.route("/google-login", methods=["POST", "OPTIONS"])
+def google_login():
+    if request.method == "OPTIONS":
+        return '', 204
+
+    token = request.json.get("token")
+    try:
+        id_info = google.oauth2.id_token.verify_oauth2_token(
+            token, google.auth.transport.requests.Request()
+        )
+        email = id_info.get("email")
+        google_id = id_info.get("sub")
+        name = id_info.get("name", "Google User")
+
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            user = User(
+                username=name,
+                email=email,
+                google_id=google_id,
+                password=None,
+                created_at=datetime.now(IST)
+            )
+            db.session.add(user)
+            db.session.commit()
+
+        access_token = create_access_token(identity=str(user.userId))
+        return jsonify({"message": "Google login successful", "token": access_token})
+
+    except Exception as e:
+        return jsonify({"error": "Invalid Google token", "details": str(e)}), 400
+
+# ============================= Get User =============================
+@auth_bp.route("/users/<int:user_id>", methods=["GET"])
+def get_user(user_id):
+    user = User.query.get_or_404(user_id)
+    return jsonify({
+        "userId": user.userId,
+        "username": user.username,
+        "email": user.email,
+        "created_at": user.created_at
+    })
+
+# ============================= Signup =============================
 @auth_bp.route("/signup", methods=["POST", "OPTIONS"])
 def signup():
     if request.method == "OPTIONS":
@@ -168,7 +148,6 @@ def signup():
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "User already exists"}), 400
 
-    # Store user temporarily until OTP verified
     hashed_pw = generate_password_hash(password)
     otp = generate_and_store_otp(email)
 
@@ -188,7 +167,7 @@ def signup():
         print("SMTP Error:", e)
         return jsonify({"error": "Failed to send OTP"}), 500
 
-
+# ============================= Verify Signup OTP =============================
 @auth_bp.route("/verify-signup-otp", methods=["POST"])
 def verify_signup_otp():
     data = request.get_json()
@@ -204,8 +183,12 @@ def verify_signup_otp():
     if error:
         return jsonify({"error": error}), 400
 
-    # OTP is valid → create the user
-    new_user = User(username=username, email=email, password=password)
+    new_user = User(
+        username=username,
+        email=email,
+        password=generate_password_hash(password),
+        created_at=datetime.now(IST)
+    )
     db.session.add(new_user)
     db.session.commit()
 
@@ -216,10 +199,7 @@ def verify_signup_otp():
         "user": {"id": new_user.userId, "email": email}
     }), 200
 
-
-# ==============================
-# 🔹 Forgot Password
-# ==============================
+# ============================= Forgot Password =============================
 @auth_bp.route("/forgot-password", methods=["POST"])
 def forgot_password():
     data = request.get_json()
@@ -246,10 +226,7 @@ def forgot_password():
         print("SMTP Error:", e)
         return jsonify({"error": "Failed to send OTP"}), 500
 
-
-# ==============================
-# 🔹 Verify OTP (common endpoint)
-# ==============================
+# ============================= Verify OTP =============================
 @auth_bp.route("/verify-otp", methods=["POST"])
 def verify_otp():
     data = request.get_json()
@@ -265,10 +242,7 @@ def verify_otp():
 
     return jsonify({"message": "OTP verified"}), 200
 
-
-# ==============================
-# 🔹 Reset Password
-# ==============================
+# ============================= Reset Password =============================
 @auth_bp.route("/reset-password", methods=["POST"])
 def reset_password():
     data = request.get_json()

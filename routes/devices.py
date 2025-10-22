@@ -1,5 +1,5 @@
 import uuid, json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models.models import Device, Video
@@ -10,6 +10,8 @@ import os
 import io
 from models.models import User
 
+# Define IST timezone
+IST = timezone(timedelta(hours=5, minutes=30))
 
 devices_bp = Blueprint('devices', __name__)
 
@@ -70,14 +72,9 @@ def create_device():
 
     return response
 
-#_________________downloading the config file ------------------------------------
+#----------------- Download config file ------------------------------------
 
-import io
-import json
 import zipfile
-import os
-from flask import jsonify, send_file, request
-from flask_jwt_extended import jwt_required
 
 @devices_bp.route('/<int:device_id>/download-config', methods=['GET'])
 @jwt_required()
@@ -96,7 +93,7 @@ def download_device_config(device_id):
             "api_version": "1.0"
         }
 
-        # ---------------- Server-friendly Python file path ----------------
+        # Server-friendly Python file path
         python_file_path = os.path.join(os.path.dirname(__file__), "..", "PI", "device_app.py")
         python_file_path = os.path.abspath(python_file_path)
         print(f"[INFO] Reading Python file from: {python_file_path}")
@@ -108,11 +105,11 @@ def download_device_config(device_id):
         with open(python_file_path, "r", encoding="utf-8") as f:
             python_code = f.read()
 
-        # ---------------- Start scripts ----------------
-        start_sh = "#!/bin/bash\npython3 device_app.py\n"  # Shebang ensures Linux runs it correctly
-        start_bat = "@echo off\npython device_app.py\npause\n"  # For Windows users
+        # Start scripts
+        start_sh = "#!/bin/bash\npython3 device_app.py\n"
+        start_bat = "@echo off\npython device_app.py\npause\n"
 
-        # ---------------- Create in-memory ZIP ----------------
+        # Create in-memory ZIP
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             zip_file.writestr("config.json", json.dumps(config, indent=2))
@@ -122,7 +119,6 @@ def download_device_config(device_id):
 
         zip_buffer.seek(0)
 
-        # ---------------- Send ZIP file ----------------
         return send_file(
             zip_buffer,
             mimetype='application/zip',
@@ -134,39 +130,6 @@ def download_device_config(device_id):
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
-
-
-
-# @devices_bp.route('/<int:device_id>/download-config', methods=['GET'])
-# @jwt_required()
-# def download_device_config(device_id):
-#     # Fetch the device
-#     device = Device.query.get(device_id)
-#     if not device:
-#         return jsonify({"error": "Device not found"}), 404
-
-#     # Prepare config
-#     config = {
-#         "backend_url": request.host_url.rstrip('/'),
-#         "device_code": device.device_code,
-#         "device_token": device.device_token,
-#         "api_version": "1.0"
-#     }
-
-#     # Create config file in memory
-#     config_file = io.StringIO()
-#     json.dump(config, config_file, indent=2)
-#     config_file.seek(0)
-
-#     # Send as downloadable file
-#     return send_file(
-#         io.BytesIO(config_file.getvalue().encode()),
-#         mimetype='application/json',
-#         as_attachment=True,
-#         download_name=f'config.json'
-#     )
 
 @devices_bp.route('/register', methods=['POST'])
 def register_device():
@@ -184,8 +147,8 @@ def register_device():
 
     # Update device status
     device.status = 'online'
-    device.last_seen = datetime.utcnow()
-    device.device_token = None  # Invalidate one-time token
+    device.last_seen = datetime.now(IST)  # IST-aware
+    device.device_token = None
     db.session.commit()
 
     return jsonify({
@@ -193,10 +156,8 @@ def register_device():
         "device_id": device.device_id
     }), 200
 
-
 @devices_bp.route('/status', methods=['POST'])
 def update_device_status():
-    """Update device status and playback information"""
     data = request.json
     if not data or not data.get('device_code'):
         return jsonify({"error": "Missing device_code"}), 400
@@ -205,8 +166,7 @@ def update_device_status():
     if not device:
         return jsonify({"error": "Device not found"}), 404
 
-    # Update device status
-    device.last_seen = datetime.utcnow()
+    device.last_seen = datetime.now(IST)  # IST-aware
     device.status = data.get('status', device.status)
     device.playback_state = data.get('playback_state', device.playback_state)
     
@@ -220,17 +180,12 @@ def update_device_status():
 @devices_bp.route('/list', methods=['GET'])
 @jwt_required()
 def list_devices():
-    """
-    Return all devices belonging to the logged-in user,
-    including playback status and currently playing video info.
-    """
     user_id = get_jwt_identity()
     try:
         user_id = int(str(user_id))
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid user ID"}), 422
 
-    from models.models import User, Device, Video
     user = User.query.filter_by(userId=user_id).first()
     if not user:
         return jsonify({"error": "User not found"}), 404
@@ -240,16 +195,14 @@ def list_devices():
         return jsonify({"devices": []}), 200
 
     device_list = []
-    now = datetime.utcnow()
+    now = datetime.now(IST)  # IST-aware
 
     for d in devices:
-        # Determine "active" or "inactive" dynamically (last seen < 20 sec)
         is_active = (
             d.last_seen and (now - d.last_seen).total_seconds() < 20
         )
         status = "active" if is_active else "inactive"
 
-        # Fetch video info if available
         current_video = None
         if d.current_video_id:
             video = Video.query.filter_by(video_id=d.current_video_id).first()
@@ -272,13 +225,9 @@ def list_devices():
 
     return jsonify({"devices": device_list}), 200
 
-
-
 #------------------------------ API FOR PI -------------------------------------
 
-from flask import Blueprint, request, jsonify
-from datetime import datetime, timedelta
-from models.models import Device, Schedule, Video, db , ScheduleVideo
+from models.models import Schedule, ScheduleVideo
 
 @devices_bp.route("/fetch-schedules", methods=["POST"])
 def fetch_schedules():
@@ -289,7 +238,7 @@ def fetch_schedules():
     if not device:
         return jsonify({"error": "Invalid device token"}), 401
 
-    now = datetime.utcnow()
+    now = datetime.now(IST)  # IST-aware
     next_12h = now + timedelta(hours=12)
 
     schedules = (
@@ -332,7 +281,6 @@ def fetch_schedules():
 
     return jsonify({"schedules": result})
 
-
 @devices_bp.route("/update-download-status", methods=["POST"])
 def update_download_status():
     data = request.json
@@ -356,12 +304,8 @@ def update_download_status():
 
     return jsonify({"message": "Download status updated"})
 
-
 @devices_bp.route("/update-playback", methods=["POST"])
 def update_playback():
-    """
-    Called by the Pi to report current video and playback status.
-    """
     try:
         data = request.get_json(force=True)
     except Exception:
@@ -378,13 +322,11 @@ def update_playback():
     if not device:
         return jsonify({"error": "Device not found"}), 404
 
-    # Optional: validate playback_state
     valid_states = {"playing", "paused", "stopped"}
     if playback_state not in valid_states:
         return jsonify({"error": f"Invalid playback_state '{playback_state}'"}), 400
 
-    # Update playback info
-    device.last_seen = datetime.utcnow()
+    device.last_seen = datetime.now(IST)  # IST-aware
     device.status = "active" if playback_state == "playing" else "idle"
     device.playback_state = playback_state
     device.current_video_id = video_id
@@ -396,7 +338,3 @@ def update_playback():
         "device_code": device.device_code,
         "last_seen": device.last_seen.isoformat()
     }), 200
-
-
-
-#-----------------------------------------------------------------
