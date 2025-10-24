@@ -5,7 +5,6 @@ import requests
 import platform
 import subprocess
 from datetime import datetime, timezone, timedelta
-from utils.timezone import IST, now_ist, ensure_ist
 
 # ---------------- CONFIG -------------------------------
 CONFIG_PATH = os.path.join(os.getcwd(), "config.json")
@@ -25,7 +24,7 @@ SCHEDULE_FILE = os.path.join(os.getcwd(), "schedule.json")
 CHECK_INTERVAL = 60  # check every minute for what to play
 REFRESH_INTERVAL = 3 * 60  # refresh schedule every 5 minutes
 PLAY_WINDOW_HOURS = 2
-# use centralized IST helpers
+IST = timezone(timedelta(hours=5, minutes=30))
 IS_WINDOWS = platform.system() == "Windows"
 
 vlc_process = None
@@ -74,7 +73,7 @@ def fetch_schedules():
         return []
 
 def generate_schedule_data(schedules, default_video_path):
-    now = now_ist()
+    now = datetime.now(IST)
     end_time = now + timedelta(hours=PLAY_WINDOW_HOURS)
     timeline = {}
 
@@ -87,8 +86,8 @@ def generate_schedule_data(schedules, default_video_path):
     # Fill scheduled videos
     for sch in schedules:
         try:
-            start_time = ensure_ist(datetime.fromisoformat(sch["start_time"]))
-            end_time = ensure_ist(datetime.fromisoformat(sch["end_time"]))
+            start_time = datetime.fromisoformat(sch["start_time"]).astimezone(IST)
+            end_time = datetime.fromisoformat(sch["end_time"]).astimezone(IST)
         except Exception:
             continue
 
@@ -108,7 +107,7 @@ def generate_schedule_data(schedules, default_video_path):
     print(f"[UPDATED] schedule.json with {len(timeline)} minutes of data.")
 
 def get_video_for_now():
-    now_key = now_ist().strftime("%Y-%m-%d %H:%M")
+    now_key = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     if not os.path.exists(SCHEDULE_FILE):
         return None
     try:
