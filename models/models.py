@@ -31,6 +31,8 @@ class Device(db.Model):
     playback_state = db.Column(db.String(20), default="stopped")  # playing, paused, stopped
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_fetch_time = db.Column(db.DateTime, nullable=True)
+    next_fetch_time = db.Column(db.DateTime, nullable=True)
 
     user_id = db.Column(db.Integer, db.ForeignKey('users.userId'), nullable=False)
 

@@ -250,6 +250,9 @@ def list_devices():
 #------------------------------ API FOR PI -------------------------------------
 
 from models.models import Schedule, ScheduleVideo
+from datetime import datetime, timedelta, timezone
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 @devices_bp.route("/fetch-schedules", methods=["POST"])
 def fetch_schedules():
@@ -261,6 +264,14 @@ def fetch_schedules():
         return jsonify({"error": "Invalid device token"}), 401
 
     now = datetime.now(IST)  # IST-aware
+    next_fetch = now + timedelta(minutes=3)  # Next expected fetch in 3 minutes
+
+    # Update device fetch times
+    device.last_fetch_time = now
+    device.next_fetch_time = next_fetch
+    db.session.commit()
+
+    # Fetch schedules for next 12 hours
     next_12h = now + timedelta(hours=12)
 
     schedules = (
@@ -301,7 +312,15 @@ def fetch_schedules():
             "videos": video_list
         })
 
-    return jsonify({"schedules": result})
+    # Return schedules + fetch info
+    return jsonify({
+        "schedules": result,
+        "fetch_info": {
+            "last_fetch_time": now.isoformat(),
+            "next_fetch_time": next_fetch.isoformat()
+        }
+    })
+
 
 @devices_bp.route("/update-download-status", methods=["POST"])
 def update_download_status():
