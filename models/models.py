@@ -1,4 +1,5 @@
 from datetime import datetime
+from utils.timezone import now_ist
 from extensions import db
 from sqlalchemy.dialects.mysql import LONGBLOB
 
@@ -10,7 +11,7 @@ class User(db.Model):
     email = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=True)
     google_id = db.Column(db.String(200), unique=True, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_ist)
 
     devices = db.relationship("Device", backref="owner", lazy=True, cascade="all, delete")
     videos = db.relationship("Video", backref="user", lazy=True, cascade="all, delete")
@@ -29,8 +30,8 @@ class Device(db.Model):
     last_seen = db.Column(db.DateTime, nullable=True)
     current_video_id = db.Column(db.Integer, db.ForeignKey('videos.video_id'), nullable=True)
     playback_state = db.Column(db.String(20), default="stopped")  # playing, paused, stopped
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_ist)
+    updated_at = db.Column(db.DateTime, default=now_ist, onupdate=now_ist)
     last_fetch_time = db.Column(db.DateTime, nullable=True)
     next_fetch_time = db.Column(db.DateTime, nullable=True)
 
@@ -50,7 +51,7 @@ class Video(db.Model):
     description = db.Column(db.Text, nullable=True)
     video_link = db.Column(db.String(200), nullable=True)
     duration = db.Column(db.Integer, nullable=True)
-    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    uploaded_at = db.Column(db.DateTime, default=now_ist)
     is_default = db.Column(db.Boolean, default=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.userId'), nullable=False)
     def __repr__(self):
@@ -66,7 +67,7 @@ class Schedule(db.Model):
     end_time = db.Column(db.DateTime, nullable=True)
     repeat = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now_ist)
     play_mode = db.Column(db.String(20), default="loop")
     download_status = db.Column(db.Boolean, default=False)
 
@@ -97,7 +98,7 @@ class New_Devices(db.Model):
     device_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     device_name = db.Column(db.String(100), nullable=False)
     device_code = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=now_ist, nullable=False)
 
     def __repr__(self):
         return f"<Device {self.device_name} ({self.device_code})>"

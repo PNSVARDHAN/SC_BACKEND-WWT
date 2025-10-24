@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify, Response, redirect
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.models import Video, Schedule, ScheduleVideo, Device
 from datetime import datetime, timedelta, timezone
+from utils.timezone import IST, now_ist, ensure_ist
 from extensions import db
 import io
 from flask import send_file
@@ -17,8 +18,7 @@ videos_bp = Blueprint('videos', __name__)
 
 ALLOWED_EXT = {'mp4', 'mov', 'mkv', 'avi'}
 
-# ---------------- IST TIMEZONE ----------------
-IST = timezone(timedelta(hours=5, minutes=30))
+# IST timezone helpers provided by utils.timezone
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.',1)[1].lower() in ALLOWED_EXT
@@ -74,7 +74,7 @@ def upload_video():
             title=title,
             description=description,
             video_link=video_link,
-            uploaded_at=datetime.now(IST),
+            uploaded_at=now_ist(),
             user_id=user_id,
             is_default=is_default,
             duration=duration
@@ -111,7 +111,7 @@ def get_user_videos():
             "title": v.title,
             "description": v.description,
             "duration": v.duration,
-            "uploadedAt": v.uploaded_at.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "uploadedAt": ensure_ist(v.uploaded_at).strftime("%Y-%m-%d %H:%M:%S"),
             "videoUrl": v.video_link
         }
         for v in videos
@@ -176,7 +176,7 @@ def set_default_video(video_id):
 @jwt_required()
 def get_user_next_videos():
     user_id = get_jwt_identity()
-    now = datetime.now(IST)
+    now = now_ist()
     print("Current IST time:", now)
 
     upcoming_schedules = (
@@ -189,7 +189,7 @@ def get_user_next_videos():
 
     result = []
     for schedule in upcoming_schedules:
-        current_time = schedule.start_time.astimezone(IST) if schedule.start_time.tzinfo else schedule.start_time.replace(tzinfo=IST)
+        current_time = ensure_ist(schedule.start_time)
 
         schedule_videos = (
             db.session.query(ScheduleVideo)

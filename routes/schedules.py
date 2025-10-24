@@ -1,13 +1,13 @@
 # schedules.py
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, timezone
+from utils.timezone import IST, now_ist, ensure_ist
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.models import Schedule, Video, Device, ScheduleVideo
 from extensions import db
 import random
 
-# Define IST timezone
-IST = timezone(timedelta(hours=5, minutes=30))
+# using centralized IST helpers
 
 schedules_bp = Blueprint('schedules', __name__)
 
@@ -36,8 +36,8 @@ def create_schedule_api():
         return jsonify({"msg": "not allowed"}), 403
 
     # Convert incoming ISO timestamps to IST-aware datetime
-    start_time = datetime.fromisoformat(data['start_time']).astimezone(IST)
-    end_time = datetime.fromisoformat(data['end_time']).astimezone(IST) if data.get('end_time') else None
+    start_time = ensure_ist(datetime.fromisoformat(data['start_time']))
+    end_time = ensure_ist(datetime.fromisoformat(data['end_time'])) if data.get('end_time') else None
 
     s = Schedule(
         video_id=video.video_id,
@@ -75,13 +75,13 @@ def create_multiple_schedules():
 
     try:
         # Convert to IST-aware datetime
-        start_time = datetime.fromisoformat(start_time_str).astimezone(IST)
-        end_time = datetime.fromisoformat(end_time_str).astimezone(IST) if end_time_str else None
+        start_time = ensure_ist(datetime.fromisoformat(start_time_str))
+        end_time = ensure_ist(datetime.fromisoformat(end_time_str)) if end_time_str else None
 
         created_schedules = []
 
         # Generate one group ID for this batch (IST timestamp in ms)
-        schedule_group_id = int(datetime.now(IST).timestamp() * 1000)
+        schedule_group_id = int(now_ist().timestamp() * 1000)
 
         # Insert Schedule rows for each device
         for device_id in device_ids:

@@ -6,13 +6,13 @@ from models.models import User
 import google.auth.transport.requests
 import google.oauth2.id_token
 from datetime import datetime, timedelta, timezone
+from utils.timezone import IST, now_ist, ensure_ist
 import random
 from werkzeug.security import generate_password_hash, check_password_hash
 import smtplib
 from email.mime.text import MIMEText
 
-# ---------------------------- IST TIMEZONE ----------------------------
-IST = timezone(timedelta(hours=5, minutes=30))
+# centralized IST helpers imported above
 
 # ---------------------------- Blueprint ----------------------------
 auth_bp = Blueprint("auth", __name__)
@@ -43,16 +43,16 @@ def generate_and_store_otp(email):
     otp = random.randint(100000, 999999)
     otp_storage[email] = {
         "otp": otp,
-        "expires": datetime.now(IST) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        "expires": now_ist() + timedelta(minutes=OTP_EXPIRY_MINUTES)
     }
-    print(f"[{datetime.now(IST)}] OTP {otp} generated for {email}")
+    print(f"[{now_ist()}] OTP {otp} generated for {email}")
     return otp
 
 def validate_otp(email, otp):
     if email not in otp_storage:
         return "OTP not requested"
     record = otp_storage[email]
-    if datetime.now(IST) > record["expires"]:
+    if now_ist() > record["expires"]:
         otp_storage.pop(email, None)
         return "OTP expired"
     if int(otp) != record["otp"]:
@@ -109,7 +109,7 @@ def google_login():
                 email=email,
                 google_id=google_id,
                 password=None,
-                created_at=datetime.now(IST)
+                created_at=now_ist()
             )
             db.session.add(user)
             db.session.commit()
@@ -187,7 +187,7 @@ def verify_signup_otp():
         username=username,
         email=email,
         password=generate_password_hash(password),
-        created_at=datetime.now(IST)
+        created_at=now_ist()
     )
     db.session.add(new_user)
     db.session.commit()

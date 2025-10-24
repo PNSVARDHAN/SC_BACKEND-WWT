@@ -1,5 +1,6 @@
 import uuid, json
 from datetime import datetime, timedelta, timezone
+from utils.timezone import IST, now_ist, ensure_ist
 from flask import Blueprint, jsonify, request, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models.models import Device, Video
@@ -9,9 +10,6 @@ from werkzeug.utils import secure_filename
 import os
 import io
 from models.models import User
-
-# Define IST timezone
-IST = timezone(timedelta(hours=5, minutes=30))
 
 devices_bp = Blueprint('devices', __name__)
 
@@ -147,7 +145,7 @@ def register_device():
 
     # Update device status
     device.status = 'online'
-    device.last_seen = datetime.now(IST)  # IST-aware
+    device.last_seen = now_ist()  # IST-aware
     device.device_token = None
     db.session.commit()
 
@@ -166,7 +164,7 @@ def update_device_status():
     if not device:
         return jsonify({"error": "Device not found"}), 404
 
-    device.last_seen = datetime.now(IST)  # IST-aware
+    device.last_seen = now_ist()  # IST-aware
     device.status = data.get('status', device.status)
     device.playback_state = data.get('playback_state', device.playback_state)
     
@@ -178,52 +176,41 @@ def update_device_status():
     return jsonify({"message": "Status updated successfully"}), 200
 
 
-from flask import Blueprint, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from extensions import db
-from models.models import User, Device, Video
-from datetime import datetime
-import pytz
 
-# Timezones
-IST = pytz.timezone("Asia/Kolkata")
-UTC = pytz.UTC
 
 @devices_bp.route('/list', methods=['GET'])
 @jwt_required()
 def list_devices():
-    # Get user ID from JWT
     try:
         user_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid user ID"}), 422
 
-    # Fetch user
     user = User.query.filter_by(userId=user_id).first()
     if not user:
         return jsonify({"error": "User not found"}), 404
 
-    # Fetch devices for the user
     devices = Device.query.filter_by(user_id=user.userId).all()
     if not devices:
         return jsonify({"devices": []}), 200
 
-    # Current UTC time (aware)
-    now = datetime.utcnow().replace(tzinfo=UTC)
-
+    # Current IST-aware time
+    now = now_ist()
     device_list = []
-    for d in devices:
-        last_seen = d.last_seen
-        if last_seen:
-            # Convert naive DB datetime to UTC aware
-            if last_seen.tzinfo is None:
-                last_seen = last_seen.replace(tzinfo=UTC)
-        
-        # Determine device status
-        is_active = last_seen and (now - last_seen).total_seconds() < 20
-        status = "active" if is_active else "inactive"
 
-        # Get current video if any
+    for d in devices:
+        last_seen = d.last_fetch_time
+        if last_seen:
+            # make sure last_seen is IST-aware
+            last_seen = ensure_ist(last_seen)
+        
+        is_active = (now - last_seen).total_seconds() < 180 if last_seen else False
+        new_status = "active" if is_active else "inactive"
+
+        if d.status != new_status:
+            d.status = new_status
+            db.session.commit()
+
         current_video = None
         if d.current_video_id:
             video = Video.query.filter_by(video_id=d.current_video_id).first()
@@ -238,21 +225,24 @@ def list_devices():
         device_list.append({
             "device_id": d.device_id,
             "device_code": d.device_code,
-            "status": status,
-            "last_seen": last_seen.astimezone(IST).isoformat() if last_seen else None,
+            "status": d.status,
+            "last_seen": last_seen.isoformat() if last_seen else None,
+            "last_fetch_time": ensure_ist(getattr(d, 'last_fetch_time', None)).isoformat() if getattr(d, 'last_fetch_time', None) else None,
+            "next_fetch_time": ensure_ist(getattr(d, 'next_fetch_time', None)).isoformat() if getattr(d, 'next_fetch_time', None) else None,
             "playback_state": d.playback_state,
             "current_video": current_video or None
         })
 
-    return jsonify({"devices": device_list}), 200
 
+    return jsonify({"devices": device_list}), 200
 
 #------------------------------ API FOR PI -------------------------------------
 
-from models.models import Schedule, ScheduleVideo
+from models.models import Schedule, ScheduleVideo, Device, Video
+from extensions import db
 from datetime import datetime, timedelta, timezone
 
-IST = timezone(timedelta(hours=5, minutes=30))
+# IST helpers are imported from utils.timezone at module top
 
 @devices_bp.route("/fetch-schedules", methods=["POST"])
 def fetch_schedules():
@@ -263,22 +253,22 @@ def fetch_schedules():
     if not device:
         return jsonify({"error": "Invalid device token"}), 401
 
-    now = datetime.now(IST)  # IST-aware
-    next_fetch = now + timedelta(minutes=3)  # Next expected fetch in 3 minutes
+    # Get current IST time (timezone-aware)
+    now_aware = now_ist()
 
-    # Update device fetch times
-    device.last_fetch_time = now
-    device.next_fetch_time = next_fetch
+    # Update in DB with IST-aware timestamps
+    device.status = "active"
+    device.last_fetch_time = now_aware
+    device.next_fetch_time = now_aware + timedelta(minutes=3)
     db.session.commit()
-
-    # Fetch schedules for next 12 hours
-    next_12h = now + timedelta(hours=12)
+    # Fetch schedules within the next 12 hours (IST-based)
+    next_12h_aware = now_aware + timedelta(hours=12)
 
     schedules = (
         Schedule.query
         .filter(
             Schedule.device_id == device.device_id,
-            Schedule.start_time <= next_12h,
+            Schedule.start_time <= next_12h_aware,
             Schedule.is_active == True
         )
         .order_by(Schedule.start_time.asc())
@@ -307,19 +297,20 @@ def fetch_schedules():
         result.append({
             "schedule_id": sch.schedule_id,
             "schedule_group_id": sch.schedule_group_id,
-            "start_time": sch.start_time.isoformat(),
+            "start_time": sch.start_time.isoformat() if sch.start_time else None,
             "end_time": sch.end_time.isoformat() if sch.end_time else None,
             "videos": video_list
         })
 
-    # Return schedules + fetch info
+    # Return schedules + IST times (formatted)
     return jsonify({
         "schedules": result,
         "fetch_info": {
-            "last_fetch_time": now.isoformat(),
-            "next_fetch_time": next_fetch.isoformat()
+            "last_fetch_time": now_aware.strftime("%Y-%m-%d %H:%M:%S"),
+            "next_fetch_time": (now_aware + timedelta(minutes=3)).strftime("%Y-%m-%d %H:%M:%S")
         }
     })
+
 
 
 @devices_bp.route("/update-download-status", methods=["POST"])
@@ -367,7 +358,7 @@ def update_playback():
     if playback_state not in valid_states:
         return jsonify({"error": f"Invalid playback_state '{playback_state}'"}), 400
 
-    device.last_seen = datetime.now(IST)  # IST-aware
+    device.last_seen = now_ist()  # IST-aware
     device.status = "active" if playback_state == "playing" else "idle"
     device.playback_state = playback_state
     device.current_video_id = video_id
