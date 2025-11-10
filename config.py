@@ -1,5 +1,6 @@
 import os
 from urllib.parse import quote_plus
+from datetime import timedelta
 
 def construct_database_url():
     db_type = os.getenv('DB_TYPE', 'sqlite')
@@ -25,10 +26,17 @@ def construct_database_url():
 class Config:
     # Flask
     SECRET_KEY = os.getenv('FLASK_SECRET_KEY', 'dev')
+    # Limit upload size (bytes); e.g., 200MB default
+    MAX_CONTENT_LENGTH = int(os.getenv('MAX_CONTENT_LENGTH', str(200 * 1024 * 1024)))
     
     # Database
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL') or construct_database_url()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # Engine robustness for long-lived connections (e.g., RDS/ALB)
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": int(os.getenv("DB_POOL_RECYCLE", "280")),
+    }
     
     # Google OAuth
     GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
@@ -39,6 +47,11 @@ class Config:
     JWT_TOKEN_LOCATION = ["headers"]
     JWT_HEADER_NAME = "Authorization"
     JWT_HEADER_TYPE = "Bearer"
-    JWT_ACCESS_TOKEN_EXPIRES = False  # Tokens don't expire
+    # Token expiry (seconds) default 7 days in prod; can set to False for no expiry
+    _jwt_exp = os.getenv("JWT_ACCESS_EXPIRES_SECONDS")
+    if _jwt_exp is None:
+        JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=int(os.getenv("JWT_DEFAULT_EXPIRE_DAYS", "7")))
+    else:
+        JWT_ACCESS_TOKEN_EXPIRES = False if _jwt_exp.lower() == "false" else timedelta(seconds=int(_jwt_exp))
     JWT_IDENTITY_CLAIM = 'sub'  # Use standard JWT claim name
     JWT_ERROR_MESSAGE_KEY = 'error'  # Key for error messages

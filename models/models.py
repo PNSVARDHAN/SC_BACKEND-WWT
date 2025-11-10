@@ -25,9 +25,10 @@ class User(db.Model):
     password = db.Column(db.String(200), nullable=True)
     google_id = db.Column(db.String(200), unique=True, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=now_ist)
-
     devices = db.relationship("Device", backref="owner", lazy=True, cascade="all, delete")
     videos = db.relationship("Video", backref="user", lazy=True, cascade="all, delete")
+    mobile_number = db.Column(db.String(15), nullable=False)
+    profile_photo_url = db.Column(db.String(300), nullable=True)
 
     def __repr__(self):
         return f"<User {self.username}>"
