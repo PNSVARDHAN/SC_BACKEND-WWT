@@ -55,6 +55,12 @@ def send_sms(phone_number, message, shortenurl=True):
 # ---------------------------- Blueprint ----------------------------
 auth_bp = Blueprint("auth", __name__)
 
+@auth_bp.route("/ping", methods=["GET"])  # simple health check
+def ping():
+    """Test endpoint that returns connection success message."""
+    return jsonify({"message": "connection successful"}), 200
+
+
 # ---------------------------- OTP STORAGE ----------------------------
 otp_storage = {}
 OTP_EXPIRY_MINUTES = 5
@@ -190,12 +196,41 @@ def get_user(user_id):
     })
 
 # ============================= Signup =============================
+# @auth_bp.route("/signup", methods=["POST", "OPTIONS"])
+# def signup():
+#     if request.method == "OPTIONS":
+#         return '', 204
 
-import requests
-import random
-from datetime import timedelta
+#     data = request.get_json()
+#     email = data.get("email")
+#     username = data.get("username")
+#     password = data.get("password")
 
-TWO_FACTOR_API_KEY = os.getenv("TWO_FACTOR_API_KEY")
+#     if not all([email, username, password]):
+#         return jsonify({"error": "All fields required"}), 400
+
+#     if User.query.filter_by(email=email).first():
+#         return jsonify({"error": "User already exists"}), 400
+
+#     hashed_pw = generate_password_hash(password)
+#     otp = generate_and_store_otp(email)
+
+#     try:
+#         subject = "Verify Your Account"
+#         body = (
+#             f"Hello {username},\n\n"
+#             f"Your OTP for account verification is: {otp}\n"
+#             f"It is valid for {OTP_EXPIRY_MINUTES} minutes."
+#         )
+#         send_email(email, subject, body)
+#         return jsonify({
+#             "message": "OTP sent to your email for verification",
+#             "temp_user": {"email": email, "username": username, "password": hashed_pw}
+#         }), 200
+#     except Exception as e:
+#         print("SMTP Error:", e)
+#         return jsonify({"error": "Failed to send OTP"}), 500
+
 
 @auth_bp.route("/signup", methods=["POST", "OPTIONS"])
 def signup():
@@ -206,7 +241,7 @@ def signup():
     email = data.get("email")
     username = data.get("username")
     password = data.get("password")
-    mobile_number = "+91" + data.get("mobile_number")
+    mobile_number = data.get("mobile_number")  
 
     if not all([email, username, password, mobile_number]):
         return jsonify({"error": "All fields required"}), 400
@@ -216,11 +251,10 @@ def signup():
 
     hashed_pw = generate_password_hash(password)
 
-    # ----- Generate OTP -----
+    # ----- Generate one common OTP -----
     otp = random.randint(100000, 999999)
     expiry_time = now_ist() + timedelta(minutes=OTP_EXPIRY_MINUTES)
-    otp_storage[email] = {"otp": otp, "expires": expiry_time, "mobile": mobile_number , "username": username, "password": hashed_pw , "email": email}
-
+    otp_storage[email] = {"otp": otp, "expires": expiry_time, "mobile": mobile_number}
     print(f"[{now_ist()}] OTP {otp} generated for {email} / {mobile_number}")
 
     # ----- Send OTP to Email -----
@@ -236,18 +270,14 @@ def signup():
         print("SMTP Error:", e)
         return jsonify({"error": "Failed to send email OTP"}), 500
 
-    # ----- Send OTP via 2Factor Custom OTP API -----
+    # ----- Send OTP to Mobile using 2Factor -----
     try:
-        # Format: https://2factor.in/API/V1/:api_key/SMS/:phone_number/:otp_value/:otp_template_name
-        api_url = f"https://2factor.in/API/V1/{TWO_FACTOR_API_KEY}/SMS/{mobile_number}/{otp}/OTP"
-        response = requests.get(api_url)
+        url = f"https://2factor.in/API/V1/{TWO_FACTOR_API_KEY}/SMS/{mobile_number}/{otp}"
+        response = requests.get(url)
         res_data = response.json()
-
         if res_data.get("Status") != "Success":
             print("2Factor Error:", res_data)
             return jsonify({"error": "Failed to send mobile OTP"}), 500
-
-        print(f"2Factor OTP Sent: {res_data}")
     except Exception as e:
         print("2Factor API Error:", e)
         return jsonify({"error": "Failed to send SMS OTP"}), 500
@@ -266,59 +296,36 @@ def signup():
     
 
 # ============================= Verify Signup OTP =============================
-@auth_bp.route("/verify-signup-otp", methods=["POST", "OPTIONS"])
+@auth_bp.route("/verify-signup-otp", methods=["POST"])
 def verify_signup_otp():
-    if request.method == "OPTIONS":
-        return '', 200
-
     data = request.get_json()
     email = data.get("email")
     otp = data.get("otp")
+    username = data.get("username")
+    password = data.get("password")
 
-    if not email or not otp:
-        return jsonify({"error": "Email and OTP are required"}), 400
+    if not all([email, otp, username, password]):
+        return jsonify({"error": "Missing data"}), 400
 
-    otp_data = otp_storage.get(email)
-    if not otp_data:
-        return jsonify({"error": "OTP expired or not found"}), 400
+    error = validate_otp(email, otp)
+    if error:
+        return jsonify({"error": error}), 400
 
-    if str(otp_data["otp"]) != str(otp):
-        return jsonify({"error": "Invalid OTP"}), 400
-
-    if now_ist() > otp_data["expires"]:
-        return jsonify({"error": "OTP expired"}), 400
-
-    # ✅ Retrieve all details safely
-    mobile_number = otp_data.get("mobile")
-    username = otp_data.get("username")
-    password = otp_data.get("password")
-
-    if not all([mobile_number, username, password]):
-        return jsonify({"error": "Missing user data"}), 400
-
-    # Save new user
     new_user = User(
         username=username,
         email=email,
-        password=password,
-        mobile_number=mobile_number
+        password=generate_password_hash(password),
+        created_at=now_ist()
     )
     db.session.add(new_user)
     db.session.commit()
 
-    otp_storage.pop(email, None)
-    access_token = create_access_token(identity=new_user.userId)
-
+    token = create_access_token(identity=str(new_user.userId))
     return jsonify({
-        "message": "User verified and registered successfully",
-        "token": access_token,
-        "user": {
-            "id": new_user.userId,
-            "email": new_user.email,
-            "username": new_user.username
-        }
+        "message": "Signup successful",
+        "token": token,
+        "user": {"id": new_user.userId, "email": email}
     }), 200
-
 
 # ============================= Forgot Password =============================
 @auth_bp.route("/forgot-password", methods=["POST"])
